@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Night Heist</title>
+
+<style>
+* {
+    box-sizing: border-box;
+    user-select: none;
+}
+
+body {
+    margin: 0;
+    background: #090d16;
+    color: white;
+    font-family: Arial, sans-serif;
+    overflow: hidden;
+}
+
+#game {
+    display: block;
+    margin: auto;
+    background: #151b29;
+    max-width: 100vw;
+    max-height: 100vh;
+}
+
+#ui {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 5;
+    background: rgba(0,0,0,.65);
+    padding: 10px 15px;
+    border-radius: 10px;
+    font-size: 16px;
+}
+
+#message {
+    position: fixed;
+    left: 50%;
+    top: 80px;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,.8);
+    padding: 12px 20px;
+    border-radius: 10px;
+    display: none;
+}
+
+#controls {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 10px;
+}
+
+button {
+    width: 60px;
+    height: 60px;
+    border: 0;
+    border-radius: 15px;
+    background: #242c40;
+    color: white;
+    font-size: 22px;
+}
+
+button:active {
+    background: #43506d;
+}
+</style>
+</head>
+
+<body>
+
+<div id="ui">
+    💰 Loot: <span id="loot">0</span> |
+    🔑 Keys: <span id="keys">0</span> |
+    ⭐ Score: <span id="score">0</span>
+</div>
+
+<div id="message"></div>
+
+<canvas id="game" width="1000" height="600"></canvas>
+
+<div id="controls">
+    <button id="left">◀</button>
+    <button id="up">▲</button>
+    <button id="down">▼</button>
+    <button id="right">▶</button>
+    <button id="action">E</button>
+</div>
+
+<script>
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const lootText = document.getElementById("loot");
+const keysText = document.getElementById("keys");
+const scoreText = document.getElementById("score");
+const message = document.getElementById("message");
+
+const keys = {};
+
+let gameOver = false;
+let levelComplete = false;
+
+const player = {
+    x: 90,
+    y: 500,
+    w: 28,
+    h: 40,
+    speed: 3.2,
+    loot: 0,
+    keys: 0,
+    score: 0
+};
+
+/*
+    ORIGINAL GUARD CHARACTER
+    Named Devan Shu as requested.
+*/
+
+const guard = {
+    name: "Devan Shu",
+    x: 500,
+    y: 270,
+    w: 30,
+    h: 40,
+    speed: 1.4,
+    direction: 1,
+    range: 210,
+    alert: false
+};
+
+const walls = [
+
+    // Outer walls
+    {x:0, y:0, w:1000, h:20},
+    {x:0, y:580, w:1000, h:20},
+    {x:0, y:0, w:20, h:600},
+    {x:980, y:0, w:20, h:600},
+
+    // Interior walls
+    {x:200, y:100, w:20, h:300},
+    {x:400, y:20, w:20, h:200},
+    {x:400, y:380, w:20, h:200},
+    {x:650, y:100, w:20, h:300},
+    {x:800, y:250, w:180, h:20}
+];
+
+const doors = [
+    {
+        x:200,
+        y:400,
+        w:20,
+        h:80,
+        locked:true
+    },
+    {
+        x:650,
+        y:400,
+        w:20,
+        h:80,
+        locked:true
+    }
+];
+
+const lootItems = [
+    {x:120,y:120,value:100,taken:false},
+    {x:300,y:80,value:150,taken:false},
+    {x:540,y:100,value:200,taken:false},
+    {x:730,y:150,value:250,taken:false},
+    {x:880,y:350,value:300,taken:false}
+];
+
+const keyItems = [
+    {x:300,y:500,taken:false},
+    {x:760,y:500,taken:false}
+];
+
+const exit = {
+    x:900,
+    y:500,
+    w:50,
+    h:60
+};
+
+
+/* ---------------- INPUT ---------------- */
+
+window.addEventListener("keydown", e => {
+    keys[e.key.toLowerCase()] = true;
+
+    if(e.key.toLowerCase() === "e") {
+        interact();
+    }
+
+    if(e.key === "r" && gameOver) {
+        location.reload();
+    }
+});
+
+window.addEventListener("keyup", e => {
+    keys[e.key.toLowerCase()] = false;
+});
+
+
+function buttonControl(id, key) {
+
+    const button = document.getElementById(id);
+
+    button.addEventListener("pointerdown", () => {
+        keys[key] = true;
+    });
+
+    button.addEventListener("pointerup", () => {
+        keys[key] = false;
+    });
+
+    button.addEventListener("pointerleave", () => {
+        keys[key] = false;
+    });
+}
+
+buttonControl("left","arrowleft");
+buttonControl("right","arrowright");
+buttonControl("up","arrowup");
+buttonControl("down","arrowdown");
+
+document.getElementById("action")
+    .addEventListener("pointerdown", interact);
+
+
+/* ---------------- COLLISION ---------------- */
+
+function collision(a,b) {
+
+    return (
+        a.x < b.x + b.w &&
+        a.x + a.w > b.x &&
+        a.y < b.y + b.h &&
+        a.y + a.h > b.y
+    );
+}
+
+
+function blocked(rect) {
+
+    for(const wall of walls) {
+        if(collision(rect, wall))
+            return true;
+    }
+
+    for(const door of doors) {
+        if(!door.locked && collision(rect,door))
+            continue;
+
+        if(door.locked && collision(rect,door))
+            return true;
+    }
+
+    return false;
+}
+
+
+/* ---------------- PLAYER ---------------- */
+
+function movePlayer() {
+
+    if(gameOver || levelComplete)
+        return;
+
+    let dx = 0;
+    let dy = 0;
+
+    if(keys["arrowleft"] || keys["a"]) dx -= player.speed;
+    if(keys["arrowright"] || keys["d"]) dx += player.speed;
+    if(keys["arrowup"] || keys["w"]) dy -= player.speed;
+    if(keys["arrowdown"] || keys["s"]) dy += player.speed;
+
+    let newX = {
+        x:player.x + dx,
+        y:player.y,
+        w:player.w,
+        h:player.h
+    };
+
+    if(!blocked(newX))
+        player.x += dx;
+
+    let newY = {
+        x:player.x,
+        y:player.y + dy,
+        w:player.w,
+        h:player.h
+    };
+
+    if(!blocked(newY))
+        player.y += dy;
+}
+
+
+/* ---------------- INTERACTION ---------------- */
+
+function interact() {
+
+    if(gameOver || levelComplete)
+        return;
+
+    // Collect loot
+    for(const item of lootItems) {
+
+        const box = {
+            x:item.x - 12,
+            y:item.y - 12,
+            w:24,
+            h:24
+        };
+
+        if(!item.taken && collision(player,box)) {
+
+            item.taken = true;
+
+            player.loot += item.value;
+            player.score += item.value;
+
+            showMessage("Loot secured: $" + item.value);
+
+            updateUI();
+        }
+    }
+
+    // Collect keys
+    for(const item of keyItems) {
+
+        const box = {
+            x:item.x - 12,
+            y:item.y - 12,
+            w:24,
+            h:24
+        };
+
+        if(!item.taken && collision(player,box)) {
+
+            item.taken = true;
+            player.keys++;
+
+            showMessage("🔑 Key acquired!");
+
+            updateUI();
+        }
+    }
+
+    // Open doors
+    for(const door of doors) {
+
+        const near = {
+            x:door.x - 25,
+            y:door.y - 25,
+            w:door.w + 50,
+            h:door.h + 50
+        };
+
+        if(collision(player,near) && door.locked) {
+
+            if(player.keys > 0) {
+
+                door.locked = false;
+                player.keys--;
+
+                showMessage("Door unlocked!");
+
+                updateUI();
+
+            } else {
+
+                showMessage("You need a key.");
+            }
+        }
+    }
+
+    // Exit
+    if(collision(player,exit)) {
+
+        if(lootItems.every(item => item.taken)) {
+
+            levelComplete = true;
+            player.score += 500;
+
+            showMessage(
+                "MISSION COMPLETE! Score: " +
+                player.score
+            );
+
+        } else {
+
+            showMessage(
+                "You haven't collected all the loot."
+            );
+        }
+    }
+}
+
+
+/* ---------------- GUARD ---------------- */
+
+function updateGuard() {
+
+    if(gameOver)
+        return;
+
+    guard.x += guard.speed * guard.direction;
+
+    if(guard.x > 850)
+        guard.direction = -1;
+
+    if(guard.x < 450)
+        guard.direction = 1;
+
+    guard.alert = playerDetected();
+}
+
+
+/* ---------------- DETECTION ---------------- */
+
+function playerDetected() {
+
+    const gx = guard.x + guard.w/2;
+    const gy = guard.y + guard.h/2;
+
+    const px = player.x + player.w/2;
+    const py = player.y + player.h/2;
+
+    const dx = px-gx;
+    const dy = py-gy;
+
+    const distance = Math.sqrt(dx*dx + dy*dy);
+
+    if(distance > guard.range)
+        return false;
+
+    /*
+        Guard flashlight faces in the direction
+        he is walking.
+    */
+
+    if(guard.direction === 1 && dx < 0)
+        return false;
+
+    if(guard.direction === -1 && dx > 0)
+        return false;
+
+    // Check walls blocking vision
+    for(const wall of walls) {
+
+        if(lineIntersectsRect(
+            gx,gy,px,py,wall
+        )) {
+
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+function lineIntersectsRect(x1,y1,x2,y2,r) {
+
+    const steps = 25;
+
+    for(let i=0;i<=steps;i++) {
+
+        const t = i/steps;
+
+        const x = x1+(x2-x1)*t;
+        const y = y1+(y2-y1)*t;
+
+        if(
+            x > r.x &&
+            x < r.x+r.w &&
+            y > r.y &&
+            y < r.y+r.h
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+/* ---------------- DRAW ---------------- */
+
+function drawBackground() {
+
+    ctx.fillStyle = "#111827";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // Floor tiles
+    ctx.strokeStyle = "#1d2637";
+
+    for(let x=20;x<980;x+=40) {
+
+        ctx.beginPath();
+        ctx.moveTo(x,20);
+        ctx.lineTo(x,580);
+        ctx.stroke();
+    }
+
+    for(let y=20;y<580;y+=40) {
+
+        ctx.beginPath();
+        ctx.moveTo(20,y);
+        ctx.lineTo(980,y);
+        ctx.stroke();
+    }
+}
+
+
+function drawWalls() {
+
+    ctx.fillStyle = "#30394d";
+
+    for(const wall of walls) {
+        ctx.fillRect(
+            wall.x,
+            wall.y,
+            wall.w,
+            wall.h
+        );
+    }
+}
+
+
+function drawDoors() {
+
+    for(const door of doors) {
+
+        ctx.fillStyle =
+            door.locked ? "#a33b3b" : "#3ba35b";
+
+        ctx.fillRect(
+            door.x,
+            door.y,
+            door.w,
+            door.h
+        );
+    }
+}
+
+
+function drawLoot() {
+
+    for(const item of lootItems) {
+
+        if(item.taken)
+            continue;
+
+        ctx.fillStyle = "#ffd34d";
+
+        ctx.beginPath();
+        ctx.arc(
+            item.x,
+            item.y,
+            10,
+            0,
+            Math.PI*2
+        );
+
+        ctx.fill();
+
+        ctx.fillStyle = "#fff";
+        ctx.font = "12px Arial";
+        ctx.fillText(
+            "$",
+            item.x-4,
+            item.y+4
+        );
+    }
+}
+
+
+function drawKeys() {
+
+    for(const item of keyItems) {
+
+        if(item.taken)
+            continue;
+
+        ctx.fillStyle = "#70d6ff";
+
+        ctx.beginPath();
+
+        ctx.arc(
+            item.x,
+            item.y,
+            9,
+            0,
+            Math.PI*2
+        );
+
+        ctx.fill();
+
+        ctx.fillRect(
+            item.x+6,
+            item.y-2,
+            12,
+            4
+        );
+    }
+}
+
+
+function drawExit() {
+
+    ctx.fillStyle = "#39d98a";
+
+    ctx.fillRect(
+        exit.x,
+        exit.y,
+        exit.w,
+        exit.h
+    );
+
+    ctx.fillStyle = "#07140d";
+    ctx.font = "12px Arial";
+
+    ctx.fillText(
+        "EXIT",
+        exit.x+8,
+        exit.y+35
+    );
+}
+
+
+/* ---------------- FLASHLIGHT ---------------- */
+
+function drawFlashlight() {
+
+    const gx = guard.x + guard.w/2;
+    const gy = guard.y + guard.h/2;
+
+    const direction = guard.direction;
+
+    const beamLength = guard.range;
+    const beamWidth = 0.55;
+
+    ctx.save();
+
+    ctx.beginPath();
+
+    ctx.moveTo(gx,gy);
+
+    ctx.arc(
+        gx,
+        gy,
+        beamLength,
+        direction === 1
+            ? -beamWidth
+            : Math.PI-beamWidth,
+
+        direction === 1
+            ? beamWidth
+            : Math.PI+beamWidth
+    );
+
+    ctx.closePath();
+
+    ctx.fillStyle =
+        guard.alert
+            ? "rgba(255,60,60,.20)"
+            : "rgba(255,240,150,.12)";
+
+    ctx.fill();
+
+    ctx.restore();
+}
+
+
+/* ---------------- CHARACTERS ---------------- */
+
+function drawPlayer() {
+
+    // Body
+    ctx.fillStyle = "#4c8dff";
+
+    ctx.fillRect(
+        player.x,
+        player.y+12,
+        player.w,
+        player.h-12
+    );
+
+    // Head
+    ctx.fillStyle = "#f0c7a4";
+
+    ctx.beginPath();
+
+    ctx.arc(
+        player.x+player.w/2,
+        player.y+9,
+        9,
+        0,
+        Math.PI*2
+    );
+
+    ctx.fill();
+}
+
+
+function drawGuard() {
+
+    // Body
+    ctx.fillStyle =
+        guard.alert ? "#e04444" : "#c6cbd6";
+
+    ctx.fillRect(
+        guard.x,
+        guard.y+12,
+        guard.w,
+        guard.h-12
+    );
+
+    // Head
+    ctx.fillStyle = "#e0b08c";
+
+    ctx.beginPath();
+
+    ctx.arc(
+        guard.x+guard.w/2,
+        guard.y+9,
+        9,
+        0,
+        Math.PI*2
+    );
+
+    ctx.fill();
+
+    // Flashlight
+    ctx.fillStyle = "#ffd34d";
+
+    ctx.fillRect(
+        guard.direction === 1
+            ? guard.x+guard.w
+            : guard.x-6,
+
+        guard.y+20,
+
+        7,
+        7
+    );
+
+    // Name
+    ctx.fillStyle = "white";
+    ctx.font = "12px Arial";
+
+    ctx.fillText(
+        "Devan Shu",
+        guard.x-12,
+        guard.y-8
+    );
+}
+
+
+/* ---------------- UI ---------------- */
+
+function updateUI() {
+
+    lootText.textContent =
+        player.loot;
+
+    keysText.textContent =
+        player.keys;
+
+    scoreText.textContent =
+        player.score;
+}
+
+
+function showMessage(text) {
+
+    message.textContent = text;
+    message.style.display = "block";
+
+    setTimeout(() => {
+
+        if(!levelComplete && !gameOver)
+            message.style.display = "none";
+
+    },2000);
+}
+
+
+/* ---------------- GAME OVER ---------------- */
+
+function checkDetection() {
+
+    if(playerDetected()) {
+
+        gameOver = true;
+
+        message.style.display = "block";
+
+        message.innerHTML =
+            "<b>CAUGHT!</b><br>" +
+            "Devan Shu spotted you.<br><br>" +
+            "Press R to restart.";
+    }
+}
+
+
+/* ---------------- GAME LOOP ---------------- */
+
+function gameLoop() {
+
+    movePlayer();
+
+    updateGuard();
+
+    checkDetection();
+
+    drawBackground();
+    drawFlashlight();
+    drawWalls();
+    drawDoors();
+    drawLoot();
+    drawKeys();
+    drawExit();
+    drawPlayer();
+    drawGuard();
+
+    requestAnimationFrame(gameLoop);
+}
+
+updateUI();
+gameLoop();
+
+</script>
+
+</body>
+</html>
